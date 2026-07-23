@@ -1,36 +1,52 @@
 import os
 import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, Defaults
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BASE = "https://blacknodezw.zone.id"
 
+# --- FIX for Render Web Service "No open ports" ---
+def keep_port():
+    port = int(os.environ.get("PORT", 10000))
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"STAR MEDIA Bot Running")
+        def log_message(self, *a):
+            pass
+    try:
+        HTTPServer(("0.0.0.0", port), H).serve_forever()
+    except:
+        pass
+
+threading.Thread(target=keep_port, daemon=True).start()
+# --------------------------------------------------
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🌟 STAR MEDIA\n\nSend song name OR YouTube link\nExample: John Michael Howell missing piece",
-        disable_web_page_preview=True
+        "🌟 STAR MEDIA\n\nSend song name OR YouTube link\nExample: John Michael Howell missing piece"
     )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
-    # 1. Direct URL
     if "youtube.com" in text or "youtu.be" in text or "tiktok.com" in text:
         url = text
-        buttons = [
-            [InlineKeyboardButton("🎵 MP3", callback_data=f"mp3|0"),
-             InlineKeyboardButton("🎬 MP4", callback_data=f"mp4|0")]
-        ]
         context.user_data["url_0"] = url
+        buttons = [
+            [InlineKeyboardButton("🎵 MP3", callback_data="mp3|0"),
+             InlineKeyboardButton("🎬 MP4", callback_data="mp4|0")]
+        ]
         return await update.message.reply_text(
             f"Link detected:\n{url}",
-            reply_markup=InlineKeyboardMarkup(buttons),
-            disable_web_page_preview=True
+            reply_markup=InlineKeyboardMarkup(buttons)
         )
 
-    # 2. Search text like "John Michael Howell missing piece"
-    msg = await update.message.reply_text(f"🔍 Searching: {text}", disable_web_page_preview=True)
+    msg = await update.message.reply_text(f"🔍 Searching: {text}")
     try:
         r = requests.get(f"{BASE}/api/tiktok/search", params={"q": text}, timeout=20).json()
 
@@ -45,7 +61,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         results = raw_list[:5]
 
         if not results:
-            return await msg.edit_text(f"No results found. Try YouTube link directly.", disable_web_page_preview=True)
+            return await msg.edit_text("No results found.")
 
         buttons = []
         for i, item in enumerate(results):
@@ -61,11 +77,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await msg.edit_text(
             f"Found {len(buttons)} results for '{text}':",
-            reply_markup=InlineKeyboardMarkup(buttons),
-            disable_web_page_preview=True
+            reply_markup=InlineKeyboardMarkup(buttons)
         )
     except Exception as e:
-        await msg.edit_text(f"Search failed: {e}", disable_web_page_preview=True)
+        await msg.edit_text(f"Search failed: {e}")
 
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -76,7 +91,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sid = data.split("|", 1)[1]
         url = context.user_data.get(f"url_{sid}", "")
         if not url:
-            return await q.edit_message_text("URL expired. Search again.", disable_web_page_preview=True)
+            return await q.edit_message_text("URL expired. Search again.")
 
         buttons = [
             [InlineKeyboardButton("🎵 MP3", callback_data=f"mp3|{sid}"),
@@ -84,8 +99,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         return await q.edit_message_text(
             f"Selected:\n{url}\n\nChoose format:",
-            reply_markup=InlineKeyboardMarkup(buttons),
-            disable_web_page_preview=True
+            reply_markup=InlineKeyboardMarkup(buttons)
         )
 
     if data.startswith("mp3|") or data.startswith("mp4|"):
@@ -93,29 +107,26 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         url = context.user_data.get(f"url_{sid}", sid)
 
         endpoint = f"{BASE}/api/youtube/{fmt}"
-        await q.edit_message_text(f"⏳ Fetching {fmt.upper()}...\n{url}", disable_web_page_preview=True)
+        await q.edit_message_text(f"⏳ Fetching {fmt.upper()}...\n{url}")
 
         try:
             res = requests.get(endpoint, params={"url": url}, timeout=40).json()
             dl_url = res.get("url") or res.get("download_url") or res.get("downloadUrl") or res.get("result") or res.get("link")
 
             if not dl_url:
-                # if API returns string directly
                 if isinstance(res, str):
                     dl_url = res
                 else:
-                    return await q.edit_message_text(f"❌ No link returned:\n{str(res)[:500]}", disable_web_page_preview=True)
+                    return await q.edit_message_text(f"❌ No link returned:\n{str(res)[:500]}")
 
-            await q.edit_message_text(
-                f"✅ {fmt.upper()} Ready!\n\n{dl_url}",
-                disable_web_page_preview=True
-            )
+            await q.edit_message_text(f"✅ {fmt.upper()} Ready!\n\n{dl_url}")
 
         except Exception as e:
-            await q.edit_message_text(f"❌ {BASE}/api/youtube/{fmt} failed\nError: {e}", disable_web_page_preview=True)
+            await q.edit_message_text(f"❌ {BASE}/api/youtube/{fmt} failed\nError: {e}")
 
 def main():
-    defaults = Defaults(disable_web_page_preview=True)
+    # FIX: New way to disable preview - no more deprecation warning
+    defaults = Defaults(link_preview_options=LinkPreviewOptions(is_disabled=True))
     app = Application.builder().token(BOT_TOKEN).defaults(defaults).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_button, pattern="^(choose|mp3|mp4)\\|"))
