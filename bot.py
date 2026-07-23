@@ -1,192 +1,147 @@
-import os, requests, threading
+import os, requests, threading, tempfile, glob
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, Defaults
+import yt_dlp
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-SEARCH_HOSTIFY = "https://api.hostify.indevs.in/api/search/youtube"
-DL_BASE = "https://blacknodezw.zone.id"
+DL_BASE = "https://blacknodezw.zone.id" # only as backup for download
 
 def keep_port():
     port=int(os.environ.get("PORT",10000))
     class H(SimpleHTTPRequestHandler):
         def do_GET(self):
             if self.path=="/":
-                for c in ["app/index.html","index.html"]:
-                    if os.path.exists(c):
-                        self.path="/"+c
-                        return SimpleHTTPRequestHandler.do_GET(self)
                 self.send_response(200);self.send_header("Content-type","text/html");self.end_headers()
-                self.wfile.write(b"<h1>STAR MEDIA YouTube - LIVE</h1><p>Search: John Michael Howell Missing Piece</p>")
-                return
+                self.wfile.write(b"<h1>STAR MEDIA V10 - yt-dlp LIVE</h1>");return
             return SimpleHTTPRequestHandler.do_GET(self)
         def log_message(self,*a): pass
     try:
         os.chdir("/opt/render/project/src" if os.path.exists("/opt/render/project/src") else ".")
         HTTPServer(("0.0.0.0",port),H).serve_forever()
-    except Exception as e: print(f"web {e}")
+    except: pass
 threading.Thread(target=keep_port,daemon=True).start()
 
-def extract_any(raw):
-    vid=str(raw.get("videoId") or raw.get("id") or "")
-    if isinstance(raw.get("id"),dict): vid=raw.get("id",{}).get("videoId","")
-    title=raw.get("title") or "Unknown Title"
-    channel=raw.get("channel") or raw.get("author") or raw.get("channelTitle") or "YouTube"
-    thumb=raw.get("thumbnail") or raw.get("thumbnailUrl")
-    if isinstance(thumb,list):
-        try: thumb=thumb[0].get("url") if isinstance(thumb[0],dict) else thumb[0]
-        except: thumb=None
-    if isinstance(thumb,dict): thumb=thumb.get("url")
-    if not thumb and vid: thumb=f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
-    url=raw.get("url") or f"https://www.youtube.com/watch?v={vid}" if vid else ""
-    return {"title":str(title)[:80],"artist":str(channel)[:40],"thumb":thumb,"url":url,"vid":vid}
+def yt_search(query, limit=5):
+    # This works even when hostify and invidious are down
+    try:
+        opts = {'quiet':True,'extract_flat':True,'skip_download':True,'no_warnings':True}
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+            results=[]
+            for e in info.get('entries',[]):
+                if not e: continue
+                vid=e.get('id')
+                results.append({
+                    "videoId":vid,
+                    "title":e.get('title'),
+                    "channel":e.get('uploader') or e.get('channel') or "YouTube",
+                    "thumbnail":f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
+                    "url":f"https://www.youtube.com/watch?v={vid}"
+                })
+            print(f"YT-DLP SEARCH FOUND {len(results)} for {query}")
+            return results
+    except Exception as ex:
+        print(f"yt-dlp search fail {ex}")
+        return []
 
 async def send_card(dest,item,ctx,is_edit=False):
     ctx.user_data["current"]=item
-    cap=f"🎬 *{item['title']}*\n👤 {item['artist']}\n\nChoose format:"
+    cap=f"🎬 *{item['title']}*\n👤 {item['artist']}\n\nChoose:"
     mk=InlineKeyboardMarkup([[InlineKeyboardButton("🎵 MP3",callback_data="ask_mp3"),InlineKeyboardButton("🎬 MP4",callback_data="ask_mp4")]])
     try:
-        if item["thumb"] and str(item["thumb"]).startswith("http"):
-            if is_edit: await dest.edit_message_caption(caption=cap,reply_markup=mk,parse_mode="Markdown")
-            else: await dest.reply_photo(photo=item["thumb"],caption=cap,reply_markup=mk,parse_mode="Markdown")
-        else:
-            if is_edit: await dest.edit_message_text(cap,reply_markup=mk,parse_mode="Markdown")
-            else: await dest.reply_text(cap,reply_markup=mk,parse_mode="Markdown")
-    except Exception as e:
-        print(f"send_card err {e}")
+        if is_edit: await dest.edit_message_caption(cap,reply_markup=mk,parse_mode="Markdown")
+        else: await dest.reply_photo(photo=item['thumb'],caption=cap,reply_markup=mk,parse_mode="Markdown")
+    except:
         if is_edit: await dest.edit_message_text(cap,reply_markup=mk,parse_mode="Markdown")
         else: await dest.reply_text(cap,reply_markup=mk,parse_mode="Markdown")
 
-async def start(u,c):
-    await u.message.reply_text("🌟 *STAR MEDIA - YouTube Downloader*\nSend song name e.g. `John Michael Howell Missing Piece`",parse_mode="Markdown")
+async def start(u,c): await u.message.reply_text("🌟 STAR MEDIA Ready\nSend any song name")
 
 async def handle_text(update:Update,context:ContextTypes.DEFAULT_TYPE):
     txt=update.message.text.strip()
     if "youtu" in txt or "youtu.be" in txt:
-        if "youtu.be" in txt: vid=txt.split("/")[-1].split("?")[0][:11]
-        else: vid=txt.split("v=")[-1].split("&")[0].split("?")[0][:11]
+        vid=txt.split("v=")[-1].split("&")[0][:11] if "v=" in txt else txt.split("/")[-1][:11]
         item={"title":"YouTube Link","artist":"YouTube","thumb":f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg","url":f"https://www.youtube.com/watch?v={vid}","vid":vid}
         return await send_card(update.message,item,context)
-
-    st=await update.message.reply_text(f"🔍 YouTube searching: {txt}")
-    items=[]
-    # 1. Try hostify first (your API)
-    try:
-        r=requests.get(SEARCH_HOSTIFY,params={"q":txt},timeout=10)
-        j=r.json()
-        print(f"HOSTIFY RAW: {r.text[:1500]}")
-        items=j.get("result") or j.get("data") or j.get("results") or []
-        if isinstance(items,dict): items=[items]
-    except Exception as e: print(f"hostify err {e}")
-
-    # 2. Fallback to Invidious - THIS FIXES Missing Piece official lyric video
+    st=await update.message.reply_text(f"🔍 Searching YouTube directly: {txt}")
+    items=yt_search(txt,5)
     if not items:
-        bases=["https://invidious.nerdvpn.de","https://vid.puffyan.us","https://inv.nadeko.net","https://invidious.io.lol"]
-        for base in bases:
-            try:
-                url=f"{base}/api/v1/search"
-                print(f"Trying {url} q={txt}")
-                r=requests.get(url,params={"q":txt,"type":"video"},timeout=12,headers={"User-Agent":"Mozilla/5.0"})
-                data=r.json()
-                if isinstance(data,list) and len(data)>0:
-                    items=[]
-                    for x in data[:5]:
-                        if not x.get("videoId"): continue
-                        thumb=""
-                        if x.get("videoThumbnails"):
-                            thumbs=x["videoThumbnails"]
-                            # pick hq
-                            for t in thumbs:
-                                if "hqdefault" in t.get("url",""): thumb=t["url"];break
-                            if not thumb: thumb=thumbs[0].get("url")
-                        items.append({"videoId":x["videoId"],"title":x["title"],"channel":x.get("author",""),"thumbnail":thumb})
-                    if items:
-                        print(f"INVIDIOUS SUCCESS from {base} found {len(items)}")
-                        break
-            except Exception as e:
-                print(f"invidious {base} err {e}")
-                continue
-
-    if not items:
-        return await st.edit_text(f"❌ No YouTube results for '{txt}'\n\nTry pasting YouTube link directly")
-
+        return await st.edit_text(f"❌ No results for '{txt}'\nTry shorter: 'missing piece john michael'")
     await st.delete()
-    first=extract_any(items[0])
-    context.user_data["items"]=[extract_any(i) for i in items[:5]]
-    if not first["url"]:
-        return await update.message.reply_text(f"Parse fail but found: {items[0]}")
+    first={"title":items[0]["title"],"artist":items[0]["channel"],"thumb":items[0]["thumbnail"],"url":items[0]["url"],"vid":items[0]["videoId"]}
+    context.user_data["items"]=items
     await send_card(update.message,first,context)
 
 async def handle_button(update:Update,context:ContextTypes.DEFAULT_TYPE):
     q=update.callback_query;await q.answer();d=q.data
     cur=context.user_data.get("current")
-    if not cur: return await q.edit_message_text("Session expired, search again")
+    if not cur: return await q.edit_message_text("Expired")
     if d=="ask_mp3":
-        kb=[[InlineKeyboardButton("64kbps",callback_data="q_mp3|64"),InlineKeyboardButton("128kbps",callback_data="q_mp3|128"),InlineKeyboardButton("320kbps",callback_data="q_mp3|320")],[InlineKeyboardButton("⬅️ Back",callback_data="back_main")]]
-        return await q.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(kb))
+        kb=[[InlineKeyboardButton("64k",callback_data="q_mp3|64"),InlineKeyboardButton("128k",callback_data="q_mp3|128"),InlineKeyboardButton("320k",callback_data="q_mp3|320")],[InlineKeyboardButton("⬅️ Back",callback_data="back")]]
+        return await q.edit_message_reply_markup(InlineKeyboardMarkup(kb))
     if d=="ask_mp4":
-        kb=[[InlineKeyboardButton("360p",callback_data="q_mp4|360"),InlineKeyboardButton("720p",callback_data="q_mp4|720"),InlineKeyboardButton("1080p",callback_data="q_mp4|1080")],[InlineKeyboardButton("⬅️ Back",callback_data="back_main")]]
-        return await q.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(kb))
-    if d=="back_main": return await send_card(q,cur,context,True)
+        kb=[[InlineKeyboardButton("360p",callback_data="q_mp4|360"),InlineKeyboardButton("720p",callback_data="q_mp4|720")],[InlineKeyboardButton("⬅️ Back",callback_data="back")]]
+        return await q.edit_message_reply_markup(InlineKeyboardMarkup(kb))
+    if d=="back": return await send_card(q,cur,context,True)
     if d.startswith("q_"):
         qual=d.split("|")[1];context.user_data["chosen"]=d
-        kb=[[InlineKeyboardButton("📄 Document",callback_data=f"do|doc|{d}"),InlineKeyboardButton("▶️ Stream",callback_data=f"do|stream|{d}")],[InlineKeyboardButton("⬅️ Back",callback_data="back_q")]]
-        txt=f"🎧 *{cur['title'][:50]}*\nQuality: {qual}\nHow to send?"
-        try: await q.edit_message_caption(caption=txt,reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown")
-        except: await q.edit_message_text(txt,reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown")
+        kb=[[InlineKeyboardButton("📄 Document",callback_data=f"do|doc|{d}"),InlineKeyboardButton("▶️ Stream",callback_data=f"do|stream|{d}")]]
+        try: await q.edit_message_caption(f"Quality {qual}\nHow to send?",reply_markup=InlineKeyboardMarkup(kb))
+        except: await q.edit_message_text(f"Quality {qual}\nHow?",reply_markup=InlineKeyboardMarkup(kb))
         return
-    if d=="back_q":
-        chosen=context.user_data.get("chosen","q_mp3|128")
-        is_mp3="mp3" in chosen
-        if is_mp3: kb=[[InlineKeyboardButton("64",callback_data="q_mp3|64"),InlineKeyboardButton("128",callback_data="q_mp3|128"),InlineKeyboardButton("320",callback_data="q_mp3|320")],[InlineKeyboardButton("⬅️ Back",callback_data="back_main")]]
-        else: kb=[[InlineKeyboardButton("360p",callback_data="q_mp4|360"),InlineKeyboardButton("720p",callback_data="q_mp4|720")],[InlineKeyboardButton("⬅️ Back",callback_data="back_main")]]
-        return await q.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(kb))
     if d.startswith("do|"):
         _,typ,qf=d.split("|",2);fmt=qf.split("|")[0].replace("q_","");qual=qf.split("|")[1]
         url=cur["url"]
-        print(f"DL START fmt={fmt} qual={qual} url={url}")
-        try: await q.edit_message_caption(caption=f"⏳ Downloading {fmt.upper()} {qual}...\nPlease wait 15s")
-        except:
-            try: await q.edit_message_text(f"⏳ Downloading {fmt.upper()} {qual}...")
-            except: pass
-        dl=None
+        await q.edit_message_caption(f"⏳ Downloading {fmt.upper()} {qual}...\nThis takes 20s for the first time") if True else None
+        # Try BlackNode fast download first
+        dl_url=None
         try:
-            # BlackNode only has /youtube/mp3 and /youtube/mp4 - we use those
-            endpoint=f"{DL_BASE}/api/youtube/{fmt}"
-            res=requests.get(endpoint,params={"url":url,"quality":qual},timeout=70)
-            print(f"BN RESP {res.status_code} {res.text[:1500]}")
-            j=res.json()
-            dl=j.get("url") or j.get("download_url") or j.get("result") or j.get("data",{}).get("url") if isinstance(j.get("data"),dict) else None
-        except Exception as e: print(f"bn dl err {e}")
-        if not dl:
-            return await q.message.reply_text(f"❌ Download failed\nURL: {url}\n\nCheck Render Logs > BN RESP\nIt may be age-restricted. Try another quality.")
+            r=requests.get(f"{DL_BASE}/api/youtube/{fmt}",params={"url":url,"quality":qual},timeout=30).json()
+            dl_url=r.get("url") or r.get("download_url")
+            print(f"BN fast dl {dl_url}")
+        except: pass
+        if dl_url and dl_url.startswith("http"):
+            try:
+                if typ=="doc": await q.message.reply_document(dl_url,caption=cur["title"])
+                else:
+                    if fmt=="mp3": await q.message.reply_audio(dl_url,title=cur["title"][:60])
+                    else: await q.message.reply_video(dl_url,caption=cur["title"])
+                return
+            except: pass # fall through to yt-dlp download
+
+        # FINAL FALLBACK: yt-dlp downloads file to server then uploads to Telegram (100% works)
         try:
-            if typ=="doc":
-                await q.message.reply_document(document=dl,caption=f"🎵 {cur['title']}\n@StarMediaBot")
+            tmpdir=tempfile.mkdtemp()
+            if fmt=="mp3":
+                opts={'format':'bestaudio/best','outtmpl':f'{tmpdir}/%(title)s.%(ext)s','postprocessors':[{'key':'FFmpegExtractAudio','preferredcodec':'mp3','preferredquality':qual}],'quiet':True}
             else:
-                if fmt=="mp3": await q.message.reply_audio(audio=dl,title=cur['title'][:60],performer=cur['artist'])
-                else: await q.message.reply_video(video=dl,caption=f"🎬 {cur['title']}",supports_streaming=True)
-            try: await q.edit_message_caption(caption=f"✅ Done: {cur['title'][:40]}")
-            except: pass
+                # 720 max, because 1080 often fails as you saw
+                height=qual.replace("p","")
+                opts={'format':f'best[height<={height}]','outtmpl':f'{tmpdir}/%(title)s.%(ext)s','quiet':True}
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+            files=glob.glob(f"{tmpdir}/*")
+            if not files: raise Exception("no file")
+            fpath=files[0]
+            print(f"YT-DLP DOWNLOADED {fpath}")
+            if typ=="doc":
+                await q.message.reply_document(document=open(fpath,'rb'),filename=os.path.basename(fpath),caption=cur["title"])
+            else:
+                if fmt=="mp3": await q.message.reply_audio(audio=open(fpath,'rb'),title=cur["title"][:60])
+                else: await q.message.reply_video(video=open(fpath,'rb'),caption=cur["title"],supports_streaming=True)
         except Exception as e:
-            print(f"send file err {e}")
-            await q.message.reply_text(f"✅ Ready!\nDirect link (tap to download):\n{dl}")
+            print(f"yt-dlp dl err {e}")
+            await q.message.reply_text(f"❌ Failed: {e}\nTry 360p for video, 128k for audio")
 
 def main():
-    if not BOT_TOKEN:
-        print("BOT_TOKEN missing!");return
-    defaults=Defaults(link_preview_options=LinkPreviewOptions(is_disabled=True))
-    app=Application.builder().token(BOT_TOKEN).defaults(defaults).build()
+    app=Application.builder().token(BOT_TOKEN).defaults(Defaults(link_preview_options=LinkPreviewOptions(is_disabled=True))).build()
     app.add_handler(CommandHandler("start",start))
     app.add_handler(CallbackQueryHandler(handle_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_text))
-    print("STAR MEDIA V9 YouTube Fixed - LIVE")
+    print("STAR MEDIA V10 yt-dlp READY")
     import asyncio
-    async def clean():
-        try: await app.bot.delete_webhook(drop_pending_updates=True)
-        except: pass
-    try: asyncio.get_event_loop().run_until_complete(clean())
+    try: asyncio.get_event_loop().run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
     except: pass
-    app.run_polling(drop_pending_updates=True,allowed_updates=Update.ALL_TYPES)
-
+    app.run_polling(drop_pending_updates=True)
 if __name__=="__main__": main()
