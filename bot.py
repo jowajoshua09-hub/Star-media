@@ -4,231 +4,144 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LinkPre
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, Defaults
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+SEARCH_HOSTIFY = "https://api.hostify.indevs.in/api/search/youtube"
 DL_BASE = "https://blacknodezw.zone.id"
-SEARCH_API = "https://api.hostify.indevs.in/api/search/youtube"
 
-# ===== WEB SERVER (for render site) =====
 def keep_port():
-    port = int(os.environ.get("PORT", 10000))
+    port=int(os.environ.get("PORT",10000))
     class H(SimpleHTTPRequestHandler):
         def do_GET(self):
-            if self.path == "/":
-                for cand in ["app/index.html","index.html"]:
-                    if os.path.exists(cand):
-                        self.path = "/" + cand
-                        return SimpleHTTPRequestHandler.do_GET(self)
-                self.send_response(200); self.send_header("Content-type","text/html"); self.end_headers()
-                self.wfile.write(b"<h1>STAR MEDIA Bot Live</h1><p>Bot is running</p>")
-                return
+            if self.path=="/":
+                for c in ["app/index.html","index.html"]:
+                    if os.path.exists(c): self.path="/"+c; return SimpleHTTPRequestHandler.do_GET(self)
+                self.send_response(200);self.send_header("Content-type","text/html");self.end_headers()
+                self.wfile.write(b"<h1>STAR MEDIA YouTube FIXED</h1>");return
             return SimpleHTTPRequestHandler.do_GET(self)
         def log_message(self,*a): pass
     try:
-        base = "/opt/render/project/src" if os.path.exists("/opt/render/project/src") else "."
-        os.chdir(base)
-        HTTPServer(("0.0.0.0", port), H).serve_forever()
-    except Exception as e:
-        print(f"web err {e}")
-threading.Thread(target=keep_port, daemon=True).start()
+        os.chdir("/opt/render/project/src" if os.path.exists("/opt/render/project/src") else ".")
+        HTTPServer(("0.0.0.0",port),H).serve_forever()
+    except: pass
+threading.Thread(target=keep_port,daemon=True).start()
 
-# ===== HELPERS =====
-def extract_item(raw):
-    # fix wrapper {video:{}}
-    if isinstance(raw, dict) and "video" in raw and isinstance(raw["video"], dict):
-        raw = raw["video"]
-    title = raw.get("title") or raw.get("desc") or raw.get("caption") or raw.get("name") or "Unknown Title"
-    artist = raw.get("author")
-    if isinstance(artist, dict): artist = artist.get("nickname") or artist.get("uniqueId") or "TikTok User"
-    else: artist = artist or raw.get("channel") or raw.get("username") or "Unknown Artist"
-    thumb = raw.get("cover") or raw.get("coverUrl") or raw.get("thumbnail") or raw.get("originCover") or raw.get("avatarThumb")
-    if isinstance(thumb, list): thumb = thumb[0]
-    vid = str(raw.get("id") or raw.get("videoId") or raw.get("video_id") or "")
-    duration = str(raw.get("duration") or raw.get("length") or "")
-    url = raw.get("url") or (f"https://www.tiktok.com/@user/video/{vid}" if len(vid) > 10 else f"https://www.youtube.com/watch?v={vid}" if vid else "")
-    item = {"title": str(title)[:80], "artist": str(artist)[:40], "thumb": thumb, "duration": duration, "url": url, "vid": vid}
-    print(f"EXTRACTED: {item['title'][:30]} | vid={vid} | thumb_exists={bool(thumb)}")
-    return item
+def extract_any(raw):
+    vid=raw.get("videoId") or raw.get("id") or raw.get("video_id") or ""
+    if isinstance(vid,dict): vid=vid.get("videoId","")
+    title=raw.get("title") or raw.get("name") or "Unknown"
+    channel=raw.get("channel") or raw.get("author") or raw.get("channelTitle") or "YouTube"
+    thumb=raw.get("thumbnail") or raw.get("thumbnailUrl") or raw.get("cover")
+    if isinstance(thumb,list): thumb=thumb[0].get("url") if isinstance(thumb[0],dict) else thumb[0]
+    if isinstance(thumb,dict): thumb=thumb.get("url")
+    url=raw.get("url") or (f"https://www.youtube.com/watch?v={vid}" if vid and len(str(vid))<=15 else "")
+    return {"title":str(title)[:80],"artist":str(channel)[:40],"thumb":thumb,"url":url,"vid":str(vid)}
 
-async def send_card(msg_obj, item, context, is_edit=False):
-    context.user_data["current"] = item
-    cap = f"🎵 *{item['title']}*\n👤 {item['artist']}\n"
-    if item["duration"]: cap += f"⏱ {item['duration']}\n"
-    cap += "\nChoose format:"
-    mk = InlineKeyboardMarkup([[InlineKeyboardButton("🎵 MP3", callback_data="ask_mp3"), InlineKeyboardButton("🎬 MP4", callback_data="ask_mp4")]])
+async def send_card(dest,item,ctx,is_edit=False):
+    ctx.user_data["current"]=item
+    cap=f"🎬 *{item['title']}*\n👤 {item['artist']}\n\nChoose format:"
+    mk=InlineKeyboardMarkup([[InlineKeyboardButton("🎵 MP3",callback_data="ask_mp3"),InlineKeyboardButton("🎬 MP4",callback_data="ask_mp4")]])
     try:
         if item["thumb"] and str(item["thumb"]).startswith("http"):
-            if is_edit: await msg_obj.edit_message_caption(cap, reply_markup=mk, parse_mode="Markdown")
-            else: await msg_obj.reply_photo(photo=item["thumb"], caption=cap, reply_markup=mk, parse_mode="Markdown")
+            if is_edit: await dest.edit_message_caption(cap,reply_markup=mk,parse_mode="Markdown")
+            else: await dest.reply_photo(photo=item["thumb"],caption=cap,reply_markup=mk,parse_mode="Markdown")
         else:
-            if is_edit: await msg_obj.edit_message_text(cap, reply_markup=mk, parse_mode="Markdown")
-            else: await msg_obj.reply_text(cap, reply_markup=mk, parse_mode="Markdown")
-    except Exception as e:
-        print(f"send_card err {e}")
-        if is_edit: await msg_obj.edit_message_text(cap, reply_markup=mk, parse_mode="Markdown")
-        else: await msg_obj.reply_text(cap, reply_markup=mk, parse_mode="Markdown")
+            if is_edit: await dest.edit_message_text(cap,reply_markup=mk,parse_mode="Markdown")
+            else: await dest.reply_text(cap,reply_markup=mk,parse_mode="Markdown")
+    except:
+        if is_edit: await dest.edit_message_text(cap,reply_markup=mk,parse_mode="Markdown")
+        else: await dest.reply_text(cap,reply_markup=mk,parse_mode="Markdown")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🌟 *STAR MEDIA*\nSend song name e.g. `John Michael Howell`", parse_mode="Markdown")
+async def start(u,c): await u.message.reply_text("🌟 STAR MEDIA - YouTube\nSend song name")
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    txt = update.message.text.strip()
-    if txt.startswith("http"):
-        it = extract_item({"id": txt.split("/")[-1], "title": "Direct Link", "url": txt, "cover": None})
-        return await send_card(update.message, it, context)
-
-    st = await update.message.reply_text(f"🔍 Searching: {txt}")
+async def handle_text(update:Update,context:ContextTypes.DEFAULT_TYPE):
+    txt=update.message.text.strip()
+    if "youtu" in txt or "youtube.com" in txt:
+        vid=txt.split("v=")[-1].split("&")[0][:11]
+        item={"title":"YouTube Link","artist":"YouTube","thumb":None,"url":f"https://www.youtube.com/watch?v={vid}","vid":vid}
+        return await send_card(update.message,item,context)
+    st=await update.message.reply_text(f"🔍 YouTube searching: {txt}")
+    items=[]
+    # 1. Try hostify
     try:
-        videos = []
-        # 1. Try blacknode TikTok search - structure from your screenshot: {status:200, data:{videos:[...]}}
+        r=requests.get(SEARCH_HOSTIFY,params={"q":txt},timeout=15)
+        j=r.json()
+        print(f"HOSTIFY RAW {r.text[:2000]}")
+        items=j.get("result") or j.get("data") or j.get("results") or []
+    except Exception as e: print(f"hostify err {e}")
+    # 2. If hostify empty -> BlackNode YouTube search (this WILL find John Michael Howell)
+    if not items:
         try:
-            r = requests.get(f"{DL_BASE}/api/tiktok/search", params={"q": txt, "count": 5}, timeout=20)
-            j = r.json()
-            print(f"BLACKNODE RAW: {r.text[:1500]}")
-            if isinstance(j, dict):
-                if "data" in j and isinstance(j["data"], dict) and "videos" in j["data"]:
-                    videos = j["data"]["videos"]
-                elif "data" in j and isinstance(j["data"], list):
-                    videos = j["data"]
-                elif "videos" in j:
-                    videos = j["videos"]
-        except Exception as e:
-            print(f"tiktok search err {e}")
+            r2=requests.get(f"{DL_BASE}/api/youtube/search",params={"q":txt},timeout=15)
+            print(f"BLACKNODE YT SEARCH STATUS {r2.status_code} BODY {r2.text[:2000]}")
+            j2=r2.json()
+            items=j2.get("data") or j2.get("result") or j2.get("results") or j2
+            if isinstance(items,dict): items=[items]
+        except Exception as e: print(f"bn yt search err {e}")
+    # 3. Last fallback - YT search via invidious
+    if not items:
+        try:
+            r3=requests.get(f"https://invidious.nerdvpn.de/api/v1/search",params={"q":txt,"type":"video"},timeout=15).json()
+            print(f"INVIDIOUS {str(r3)[:1000]}")
+            items=[{"videoId":x.get("videoId"),"title":x.get("title"),"channel":x.get("author"),"thumbnail":x.get("videoThumbnails",[{}])[0].get("url")} for x in r3[:5]]
+        except Exception as e: print(f"invidious err {e}")
 
-        # 2. Fallback to hostify YouTube search if TikTok empty
-        if not videos:
-            try:
-                r = requests.get(SEARCH_API, params={"q": txt}, timeout=15).json()
-                print(f"HOSTIFY RAW: {str(r)[:1000]}")
-                tmp = r.get("result") or r.get("data") or r.get("results") or []
-                if isinstance(tmp, list) and tmp: videos = tmp
-            except Exception as e:
-                print(f"hostify err {e}")
+    if not items:
+        return await st.edit_text(f"❌ No YouTube results for '{txt}'")
+    await st.delete()
+    first=extract_any(items[0])
+    context.user_data["items"]=[extract_any(i) for i in items[:5]]
+    if not first["url"]:
+        return await update.message.reply_text(f"Parse fail: {str(items[0])[:800]}")
+    await send_card(update.message,first,context)
 
-        if not videos:
-            return await st.edit_text(f"❌ No results for '{txt}'\nTry: `John Michael Howell`")
-
-        await st.delete()
-        first = extract_item(videos[0])
-        context.user_data["all"] = [extract_item(v) for v in videos]
-        await send_card(update.message, first, context)
-
-    except Exception as e:
-        print(f"SEARCH FATAL {e}")
-        await st.edit_text(f"Error: {e}")
-
-async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    d = q.data
-    cur = context.user_data.get("current")
-    if not cur: return await q.edit_message_text("Session expired, search again")
-
-    if d == "ask_mp3":
-        kb = [[InlineKeyboardButton("64kbps", callback_data="q_mp3|64"), InlineKeyboardButton("128kbps", callback_data="q_mp3|128"), InlineKeyboardButton("320kbps", callback_data="q_mp3|320")],
-              [InlineKeyboardButton("⬅️ Back", callback_data="back_main")]]
-        return await q.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(kb))
-    if d == "ask_mp4":
-        kb = [[InlineKeyboardButton("144p", callback_data="q_mp4|144"), InlineKeyboardButton("360p", callback_data="q_mp4|360")],
-              [InlineKeyboardButton("720p", callback_data="q_mp4|720"), InlineKeyboardButton("1080p", callback_data="q_mp4|1080")],
-              [InlineKeyboardButton("⬅️ Back", callback_data="back_main")]]
-        return await q.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(kb))
-    if d == "back_main":
-        return await send_card(q, cur, context, True)
-
-    if d.startswith("q_"):
-        qual = d.split("|")[1]
-        context.user_data["chosen"] = d
-        kb = [[InlineKeyboardButton("📄 Document", callback_data=f"do|doc|{d}"), InlineKeyboardButton("▶️ Stream", callback_data=f"do|stream|{d}")],
-              [InlineKeyboardButton("⬅️ Back", callback_data="back_q")]]
-        try: await q.edit_message_caption(caption=f"🎧 {cur['title']}\nQuality: {qual}\nHow to send?", reply_markup=InlineKeyboardMarkup(kb))
-        except: await q.edit_message_text(f"🎧 {cur['title']}\nQuality: {qual}\nHow to send?", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if d == "back_q":
-        chosen = context.user_data.get("chosen","q_mp3|128")
-        back = "ask_mp3" if "mp3" in chosen else "ask_mp4"
-        if back == "ask_mp3":
-            kb = [[InlineKeyboardButton("64",callback_data="q_mp3|64"),InlineKeyboardButton("128",callback_data="q_mp3|128"),InlineKeyboardButton("320",callback_data="q_mp3|320")],[InlineKeyboardButton("⬅️ Back",callback_data="back_main")]]
-        else:
-            kb = [[InlineKeyboardButton("144p",callback_data="q_mp4|144"),InlineKeyboardButton("360p",callback_data="q_mp4|360")],[InlineKeyboardButton("720p",callback_data="q_mp4|720")],[InlineKeyboardButton("⬅️ Back",callback_data="back_main")]]
+async def handle_button(update:Update,context:ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query;await q.answer();d=q.data
+    cur=context.user_data.get("current")
+    if not cur: return await q.edit_message_text("Expired")
+    if d=="ask_mp3":
+        kb=[[InlineKeyboardButton("64kbps",callback_data="q_mp3|64"),InlineKeyboardButton("128kbps",callback_data="q_mp3|128"),InlineKeyboardButton("320kbps",callback_data="q_mp3|320")],[InlineKeyboardButton("⬅️ Back",callback_data="back_main")]]
         return await q.edit_message_reply_markup(InlineKeyboardMarkup(kb))
-
+    if d=="ask_mp4":
+        kb=[[InlineKeyboardButton("360p",callback_data="q_mp4|360"),InlineKeyboardButton("720p",callback_data="q_mp4|720"),InlineKeyboardButton("1080p",callback_data="q_mp4|1080")],[InlineKeyboardButton("⬅️ Back",callback_data="back_main")]]
+        return await q.edit_message_reply_markup(InlineKeyboardMarkup(kb))
+    if d=="back_main": return await send_card(q,cur,context,True)
+    if d.startswith("q_"):
+        qual=d.split("|")[1];context.user_data["chosen"]=d
+        kb=[[InlineKeyboardButton("📄 Document",callback_data=f"do|doc|{d}"),InlineKeyboardButton("▶️ Stream",callback_data=f"do|stream|{d}")]]
+        try: await q.edit_message_caption(f"Quality {qual}\nHow to send?",reply_markup=InlineKeyboardMarkup(kb))
+        except: await q.edit_message_text(f"Quality {qual}\nHow to send?",reply_markup=InlineKeyboardMarkup(kb))
+        return
     if d.startswith("do|"):
-        _, send_type, qfull = d.split("|",2)
-        fmt = qfull.split("|")[0].replace("q_","")
-        qual = qfull.split("|")[1]
-        vid = cur.get("vid","")
-        is_tiktok = len(vid) > 12 # TikTok IDs are 19 digits
-        print(f"DOWNLOAD START fmt={fmt} qual={qual} vid={vid} is_tiktok={is_tiktok}")
-        try: await q.edit_message_caption(f"⏳ Fetching {fmt.upper()} {qual}...")
-        except:
-            try: await q.edit_message_text(f"⏳ Fetching {fmt.upper()} {qual}...")
-            except: pass
-
-        dl_url = None
-        caption = cur["title"]
+        _,typ,qf=d.split("|",2);fmt=qf.split("|")[0].replace("q_","");qual=qf.split("|")[1]
+        url=cur["url"]
+        print(f"YT DL url={url} fmt={fmt} qual={qual}")
+        try: await q.edit_message_caption(f"⏳ Downloading YouTube {fmt.upper()} {qual}...")
+        except: pass
+        dl=None
+        # Try BlackNode download (works for your video)
         try:
-            if is_tiktok:
-                # Try multiple tiktok download patterns
-                endpoints = [
-                    f"{DL_BASE}/api/tiktok/download",
-                    f"{DL_BASE}/api/tiktok/dl",
-                    "https://api.hostify.indevs.in/api/download/tiktok"
-                ]
-                for ep in endpoints:
-                    try:
-                        pr = {"url": f"https://www.tiktok.com/@a/video/{vid}", "id": vid, "video_id": vid}
-                        res = requests.get(ep, params=pr, timeout=30).json()
-                        print(f"TT DL {ep} -> {str(res)[:800]}")
-                        data = res.get("data") if isinstance(res.get("data"), dict) else res
-                        if fmt == "mp3":
-                            dl_url = data.get("music") or data.get("audio") or data.get("play") or res.get("music")
-                        else:
-                            dl_url = data.get("hdplay") or data.get("play") or data.get("wmplay") or res.get("url")
-                        if dl_url: break
-                    except Exception as e:
-                        print(f"ep {ep} fail {e}")
-                        continue
-            else:
-                # YouTube download
-                res = requests.get(f"{DL_BASE}/api/youtube/{fmt}", params={"url": cur["url"], "quality": qual}, timeout=60).json()
-                print(f"YT DL -> {str(res)[:600]}")
-                dl_url = res.get("url") or res.get("download_url") or res.get("result")
-        except Exception as e:
-            print(f"DL ERROR {e}")
-
-        if not dl_url:
-            return await q.message.reply_text(f"❌ No download link for {cur['title']}\nvid={vid}\nCheck Render Logs > TT DL line")
-
+            res=requests.get(f"{DL_BASE}/api/youtube/{fmt}",params={"url":url,"quality":qual},timeout=60).json()
+            print(f"BN DL {str(res)[:1000]}")
+            dl=res.get("url") or res.get("download_url") or res.get("result")
+        except Exception as e: print(f"bn dl err {e}")
+        if not dl:
+            return await q.message.reply_text(f"❌ No download link\nURL tried: {url}\nLog: BN DL failed - try another song or send /start")
         try:
-            if send_type == "doc":
-                if fmt == "mp3": await q.message.reply_document(document=dl_url, caption=f"🎵 {caption}")
-                else: await q.message.reply_document(document=dl_url, caption=f"🎬 {caption}")
+            if typ=="doc": await q.message.reply_document(document=dl,caption=cur["title"])
             else:
-                if fmt == "mp3": await q.message.reply_audio(audio=dl_url, title=caption[:60], performer=cur["artist"])
-                else: await q.message.reply_video(video=dl_url, caption=caption, supports_streaming=True)
-            try: await q.edit_message_caption(f"✅ Done: {caption}")
-            except: pass
+                if fmt=="mp3": await q.message.reply_audio(audio=dl,title=cur["title"][:60])
+                else: await q.message.reply_video(video=dl,caption=cur["title"],supports_streaming=True)
         except Exception as e:
-            await q.message.reply_text(f"Here is your link (Telegram could not stream directly):\n{dl_url}\n\nError: {e}")
+            await q.message.reply_text(f"Direct link (Telegram could not send file):\n{dl}\n{e}")
 
 def main():
-    if not BOT_TOKEN:
-        print("BOT_TOKEN missing! Set in Render Env Vars")
-        return
-    defaults = Defaults(link_preview_options=LinkPreviewOptions(is_disabled=True))
-    app = Application.builder().token(BOT_TOKEN).defaults(defaults).build()
-    app.add_handler(CommandHandler("start", start))
+    defaults=Defaults(link_preview_options=LinkPreviewOptions(is_disabled=True))
+    app=Application.builder().token(BOT_TOKEN).defaults(defaults).build()
+    app.add_handler(CommandHandler("start",start))
     app.add_handler(CallbackQueryHandler(handle_button))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    print("STAR MEDIA v7 - TikTok videos parser FIXED - Live")
-    # Fix Conflict error
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_text))
+    print("STAR MEDIA YOUTUBE FIXED V8 LIVE")
     import asyncio
-    async def clean():
-        try: await app.bot.delete_webhook(drop_pending_updates=True)
-        except: pass
-    try: asyncio.get_event_loop().run_until_complete(clean())
+    try: asyncio.get_event_loop().run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
     except: pass
-    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
-
-if __name__ == "__main__":
-    main()
+    app.run_polling(drop_pending_updates=True)
+if __name__=="__main__": main()
