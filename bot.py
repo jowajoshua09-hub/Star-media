@@ -122,13 +122,23 @@ def main():
     conv=ConversationHandler(entry_points=[CallbackQueryHandler(mode_handler, pattern="^mode_")], states={TITLE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_title)], LYRICS:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_lyrics_text), CallbackQueryHandler(lyrics_choice, pattern="^(ai_l|my_l)$"), CallbackQueryHandler(use_ai, pattern="^use_ai$")], GENRE:[CallbackQueryHandler(get_g, pattern="^g\\|")], MOOD:[CallbackQueryHandler(get_m, pattern="^m\\|")], VOCAL:[CallbackQueryHandler(get_v, pattern="^v\\|")], TEMPO:[CallbackQueryHandler(get_t, pattern="^t\\|")], CONFIRM:[CallbackQueryHandler(do_gen, pattern="^gen$"), CallbackQueryHandler(mode_handler, pattern="^mode_")]}, fallbacks=[CommandHandler("start", start)])
     app.add_handler(CommandHandler("start", start)); app.add_handler(conv)
     app.run_polling()
-
 if __name__=="__main__":
-    # Fake port for Render Web Service
     import threading, os
-    from http.server import HTTPServer, BaseHTTPRequestHandler
-    def fake_server():
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    # Fake web server for Render Web Service free tier
+    class HealthCheck(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Bot is running")
+        def log_message(self, format, *args):
+            return  # silence logs
+
+    def run_fake_server():
         port = int(os.environ.get("PORT", 10000))
-        HTTPServer(("", port), BaseHTTPRequestHandler).serve_forever()
-    threading.Thread(target=fake_server, daemon=True).start()
+        HTTPServer(("0.0.0.0", port), HealthCheck).serve_forever()
+
+    threading.Thread(target=run_fake_server, daemon=True).start()
+    print(f"Fake server started on port {os.environ.get('PORT', 10000)}")
     main()
