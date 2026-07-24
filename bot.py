@@ -123,4 +123,12 @@ def main():
     app.add_handler(CommandHandler("start", start)); app.add_handler(conv)
     app.run_polling()
 
-if __name__=="__main__": main()
+if __name__=="__main__":
+    # Fake port for Render Web Service
+    import threading, os
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    def fake_server():
+        port = int(os.environ.get("PORT", 10000))
+        HTTPServer(("", port), BaseHTTPRequestHandler).serve_forever()
+    threading.Thread(target=fake_server, daemon=True).start()
+    main()
