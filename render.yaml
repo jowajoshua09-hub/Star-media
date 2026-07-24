@@ -1,19 +1,13 @@
 services:
-    - type: web
-    name: star-media-bot
+    - type: worker
+    name: star-music-bot
     env: python
-    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     envVars:
             - key: BOT_TOKEN
         sync: false
-    healthCheckPath: /
-
-    - type: static
-    name: star-media-app
-    staticPublishPath: ./app
-    routes:
-            - type: rewrite
-        source: /*
-        destination: /index.html
+            - key: MUSIC_API
+        value: https://api.omegatech.app/api/ai/Remusicv2
+            - key: LYRICS_API
+        value: https://api.omegatech.app/api/ai/Gpt-4o-mini
